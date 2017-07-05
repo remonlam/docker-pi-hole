@@ -1,0 +1,63 @@
+FROM alpine:edge
+MAINTAINER adam@diginc.us <adam@diginc.us>
+
+ENV IMAGE alpine
+ENV PATH /opt/pihole:${PATH}
+
+COPY install.sh /install.sh
+COPY ./alpine/service /usr/local/bin/service
+ENV setupVars /etc/pihole/setupVars.conf
+ENV PIHOLE_INSTALL /tmp/ph_install.sh
+
+ENV TINI_VERSION v0.13.0
+ADD https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini-static /tini
+ADD https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini-static.asc /tini.asc
+
+# Tini and package requirements
+RUN apk add --update 'gnupg<2.1.17-r0' && \
+    gpg --keyserver ha.pool.sks-keyservers.net --recv-keys 0527A9B7 && \
+    gpg --verify /tini.asc && \
+    chmod +x /tini && \
+    apk add wget bash && \
+    /install.sh && \
+    rm -rf /var/cache/apk/*
+
+# Customized from submodules
+COPY ./alpine/nginx.conf /etc/nginx/nginx.conf
+
+# Things installer did and fix alpine+nginx differences
+ENV WEBLOGDIR /var/log/nginx
+ENV PHP_CONFIG '/etc/php5/php-fpm.conf'
+RUN mkdir -p /etc/pihole/ && \
+    mkdir -p /var/www/html/pihole && \
+    mkdir -p /var/www/html/admin/ && \
+    chown nginx:nginx /var/www/html && \
+    touch ${WEBLOGDIR}/access.log ${WEBLOGDIR}/error.log && \
+    chown -R nginx:nginx ${WEBLOGDIR} && \
+    sed -i 's|^user\s*=.*$|user = nginx|' $PHP_CONFIG && \
+    chmod 775 /var/www/html && \
+    touch /var/log/pihole.log && \
+    chmod 644 /var/log/pihole.log && \
+    chown dnsmasq:root /var/log/pihole.log && \
+    sed -i "s/@INT@/eth0/" /etc/dnsmasq.d/01-pihole.conf && \
+    echo 'Done!'
+
+    #sed -i 's|"cd /etc/.pihole/ && git describe --tags --abbrev=0"|"cat /etc/pi-hole_version.txt"|g' /var/www/html/admin/footer.php && \
+    #sed -i 's|"git describe --tags --abbrev=0"|"cat /etc/AdminLTE_version.txt"|g' /var/www/html/admin/footer.php && \
+    #sed -i 's|www-data|nginx|g' /etc/sudoers.d/pihole && \
+
+# php config start passes special ENVs into
+ENV PHP_ENV_CONFIG '/etc/php5/fpm.d/envs.conf'
+ENV PHP_ERROR_LOG '/var/log/nginx/error.log'
+COPY ./start.sh /
+COPY ./bash_functions.sh /
+
+# IPV6 disable flag for networks/devices that do not support it
+ENV IPv6 True
+
+EXPOSE 53 53/udp
+EXPOSE 80
+
+SHELL ["/bin/bash", "-c"]
+ENTRYPOINT ["/tini", "--"]
+CMD [ "/start.sh" ]
